@@ -189,8 +189,13 @@ class RunMeta:
     retries: int = 0
     nonce_refreshed: bool = False
 
+    actual_model: str | None = None
+
     def observe(self, ev: UpstreamEvent) -> None:
         if ev.type == "meta":
+            model = ev.data.get("model")
+            if isinstance(model, str) and model:
+                self.actual_model = model
             if ev.data.get("fallback"):
                 self.upstream_fallback = True
             label = ev.data.get("label")
@@ -201,6 +206,8 @@ class RunMeta:
 
     def to_dict(self, notes: dict[str, Any]) -> dict[str, Any]:
         out: dict[str, Any] = {"provider": self.provider, "upstream_model": self.upstream_model}
+        if self.actual_model:
+            out["actual_model"] = self.actual_model
         if self.upstream_fallback:
             out["upstream_fallback"] = True
         if self.upstream_label:
@@ -218,6 +225,8 @@ class RunMeta:
 
     def headers(self) -> dict[str, str]:
         h = {"X-Bridge-Provider": self.provider, "X-Bridge-Upstream-Model": self.upstream_model}
+        if self.actual_model:
+            h["X-Bridge-Actual-Model"] = self.actual_model
         if self.upstream_fallback:
             h["X-Bridge-Upstream-Fallback"] = "1"
         if self.paid_left is not None:
@@ -373,6 +382,21 @@ class ChatService:
     def _backoff(attempt: int) -> float:
         return min(0.5 * 2 ** (attempt - 1), 8.0) * (0.75 + random.random() / 2)
 
+    async def _ensure_session_for_auto(self, req: ChatRequest) -> None:
+        """Model 'auto' needs the site's current suggestion, which comes with the session."""
+        if (req.model or "").strip().lower() == "auto" and self.upstream.suggested_model() is None:
+            try:
+                await self.upstream.nonce()
+            except BridgeError:
+                pass  # falls back to DEFAULT_MODEL; open() will surface the real error
+
+    def _model_name(self, prep: Prepared, meta: RunMeta) -> str:
+        """Report the model that actually answered, as a public id when known."""
+        if self.s.report_actual_model and meta.actual_model:
+            info = self.builder.registry._find(meta.actual_model)
+            return info.id if info else meta.actual_model
+        return prep.model.id
+
     async def _preflight(self, pump: EventPump, meta: RunMeta, stream: bool) -> list[Any]:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.s.preflight_timeout if stream else None
@@ -392,6 +416,12 @@ class ChatService:
             if item.type in TERMINAL_TYPES:
                 raise _Terminal(item)
             meta.observe(item)
+            if self.s.strict_model and item.type == "meta" and item.data.get("fallback"):
+                raise BridgeError(
+                    f"The site would answer with a different model ({item.data.get('label') or meta.actual_model}) "
+                    "and STRICT_MODEL=true. Use model 'auto' or retry later.",
+                    status=503, code="model_unavailable", category="unavailable",
+                    extra={"upstream_label": item.data.get("label")})
             prefix.append(item)
             if item.type == "delta" or item.type == "done" or item.type in REASONING_TYPES:
                 return prefix
@@ -414,6 +444,7 @@ class ChatService:
 
     # -- non-streaming ---------------------------------------------------------
     async def complete(self, req: ChatRequest, raw: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+        await self._ensure_session_for_auto(req)
         prep = await self.builder.build(req)
         meta = RunMeta(upstream_model=prep.body["model"])
         try:
@@ -472,7 +503,7 @@ class ChatService:
             "id": "chatcmpl-" + secrets.token_hex(12),
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": prep.model.id,
+            "model": self._model_name(prep, meta),
             "choices": [{"index": 0, "message": message, "logprobs": None, "finish_reason": finish}],
             "usage": {"prompt_tokens": prep.prompt_tokens, "completion_tokens": completion_tokens,
                       "total_tokens": prep.prompt_tokens + completion_tokens},
@@ -483,6 +514,7 @@ class ChatService:
 
     # -- streaming --------------------------------------------------------------
     async def stream(self, req: ChatRequest, raw: dict[str, Any]) -> tuple[AsyncIterator[bytes], dict[str, str]]:
+        await self._ensure_session_for_auto(req)
         prep = await self.builder.build(req)
         meta = RunMeta(upstream_model=prep.body["model"])
         try:
@@ -500,7 +532,8 @@ class ChatService:
         created = int(time.time())
 
         def chunk(delta: dict[str, Any], finish: str | None = None, **extra: Any) -> bytes:
-            obj = {"id": cid, "object": "chat.completion.chunk", "created": created, "model": prep.model.id,
+            obj = {"id": cid, "object": "chat.completion.chunk", "created": created,
+                   "model": self._model_name(prep, meta),
                    "system_fingerprint": None,
                    "choices": [{"index": 0, "delta": delta, "logprobs": None, "finish_reason": finish}]}
             obj.update(extra)
@@ -556,8 +589,8 @@ class ChatService:
             yield chunk({}, finish, glm_bridge=meta.to_dict(prep.notes))
             if include_usage:
                 completion = estimate_tokens("".join(out_text))
-                yield sse({"id": cid, "object": "chat.completion.chunk", "created": created, "model": prep.model.id,
-                           "choices": [], "usage": {"prompt_tokens": prep.prompt_tokens,
+                yield sse({"id": cid, "object": "chat.completion.chunk", "created": created,
+                           "model": self._model_name(prep, meta), "choices": [], "usage": {"prompt_tokens": prep.prompt_tokens,
                                                     "completion_tokens": completion,
                                                     "total_tokens": prep.prompt_tokens + completion}})
             yield SSE_DONE

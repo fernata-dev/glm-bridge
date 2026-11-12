@@ -50,6 +50,7 @@ class ModelRegistry:
         self.aliases: dict[str, str] = {
             k.strip().lower(): v.strip().lower() for k, v in settings.model_alias_dict.items()
         }
+        self.suggest = None  # callable returning the site's suggested upstream id
         self._lookup: dict[str, str] = {}
         for pid, info in self.models.items():
             self._lookup[pid] = pid
@@ -71,6 +72,11 @@ class ModelRegistry:
         return None
 
     def resolve(self, name: str | None) -> ModelInfo:
+        if name and name.strip().lower() == "auto" and self.suggest is not None:
+            suggested = self.suggest()
+            if suggested:
+                info = self._find(suggested)
+                return info or ModelInfo(id=suggested, upstream=suggested, known=False)
         if not name or name.strip().lower() in {"default", "auto"}:
             name = self.settings.default_model
         info = self._find(name)
@@ -92,6 +98,8 @@ class ModelRegistry:
              "capabilities": {"vision": m.vision, "tools": "emulated" if self.settings.tool_emulation else False}}
             for m in self.models.values()
         ]
+        out.append({"id": "auto", "object": "model", "created": _CREATED, "owned_by": "glm-bridge",
+                    "description": "whatever model the site currently suggests (avoids silent fallbacks)"})
         for alias, target in self.aliases.items():
             out.append({"id": alias, "object": "model", "created": _CREATED, "owned_by": "glm-bridge",
                         "alias_of": target})

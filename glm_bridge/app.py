@@ -88,6 +88,7 @@ def create_app(
     auth = Authenticator(settings)
     registry = ModelRegistry(settings)
     upstream = GLMChatClient(settings, transport=upstream_transport)
+    registry.suggest = upstream.suggested_model
     fetcher = ImageFetcher(settings, transport=image_transport)
     builder = PromptBuilder(settings, registry, fetcher)
     fallback = FallbackProvider(settings, transport=fallback_transport) if settings.fallback_enabled else None

@@ -136,6 +136,24 @@ class GLMChatClient:
         self._nonce_lock = asyncio.Lock()
         self._sem = asyncio.Semaphore(max(1, settings.upstream_concurrency))
         self.state = UpstreamState()
+        self._pace_lock = asyncio.Lock()
+        self._last_start = float("-inf")
+
+    async def pace(self) -> None:
+        """Space out message starts: the site allows about one message every 3 s,
+        so waiting here is cheaper than being rejected and retrying."""
+        interval = self.settings.upstream_min_interval
+        if interval <= 0:
+            return
+        async with self._pace_lock:
+            wait = self._last_start + interval - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_start = time.monotonic()
+
+    def suggested_model(self) -> str | None:
+        value = self.state.session_info.get("suggest")
+        return value if isinstance(value, str) and value else None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -232,6 +250,7 @@ class GLMChatClient:
         """One attempt at the message endpoint. Raises NonceRejected / UpstreamHTTPError /
         httpx errors; yields parsed events. Holds a concurrency slot while open."""
         async with self.slot():
+            await self.pace()
             self.state.requests += 1
             async with self._client.stream(
                 "POST", MESSAGE_PATH, json=body,

@@ -486,3 +486,52 @@ async def test_short_cooldown_is_waited_out(make_client, fake):
     fake.script = [event("limit", message="One moment - send again in 0 s."), reply("after wait")]
     r = await client.post("/v1/chat/completions", json=chat())
     assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "after wait"
+
+
+FALLBACK_META = {"model": "glm-4-5-flash", "label": "GLM-4.5-Flash (daily limit reached)", "fallback": True}
+
+
+async def test_reports_actual_model(make_client, fake):
+    client = await make_client()
+    fake.script = [reply("hi", meta=FALLBACK_META), reply("hi", meta=FALLBACK_META)]
+    r = await client.post("/v1/chat/completions", json=chat())
+    assert r.json()["model"] == "glm-4.5-flash" and r.json()["glm_bridge"]["actual_model"] == "glm-4-5-flash"
+    assert r.headers["x-bridge-actual-model"] == "glm-4-5-flash"
+    r = await client.post("/v1/chat/completions", json=chat(stream=True))
+    chunks, _ = parse_sse(r.text)
+    assert {c["model"] for c in chunks} == {"glm-4.5-flash"}
+
+
+async def test_report_actual_model_can_be_disabled(make_client, fake):
+    client = await make_client(report_actual_model=False)
+    fake.script = [reply("hi", meta=FALLBACK_META)]
+    assert (await client.post("/v1/chat/completions", json=chat())).json()["model"] == "glm-5.3-flash"
+
+
+async def test_strict_model_rejects_silent_fallback(make_client, fake):
+    client = await make_client(strict_model=True)
+    fake.script = [reply("hi", meta=FALLBACK_META)]
+    r = await client.post("/v1/chat/completions", json=chat())
+    assert r.status_code == 503 and r.json()["error"]["code"] == "model_unavailable"
+
+
+async def test_strict_model_uses_fallback_provider(make_client, fake):
+    client = await make_client(strict_model=True, **FALLBACK)
+    fake.script = [reply("hi", meta=FALLBACK_META)]
+    r = await client.post("/v1/chat/completions", json=chat())
+    assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "from fallback"
+
+
+async def test_auto_model_uses_site_suggestion(make_client, fake):
+    client = await make_client()
+    r = await client.post("/v1/chat/completions", json={**chat(), "model": "auto"})
+    assert r.status_code == 200 and fake.message_bodies[0]["model"] == "glm-4-5-flash"
+
+
+async def test_requests_are_paced(make_client, fake):
+    import time
+    client = await make_client(upstream_min_interval=0.3)
+    t0 = time.monotonic()
+    for _ in range(3):
+        assert (await client.post("/v1/chat/completions", json=chat())).status_code == 200
+    assert time.monotonic() - t0 >= 0.6

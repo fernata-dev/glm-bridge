@@ -91,7 +91,7 @@ class FakeUpstream:
                 return self.session_response()
             self.nonce_counter += 1
             self.valid_nonce = f"nonce-{self.nonce_counter}"
-            return httpx.Response(200, json={"nonce": self.valid_nonce, "paidLeft": 5})
+            return httpx.Response(200, json={"nonce": self.valid_nonce, "paidLeft": 5, "suggest": "glm-4-5-flash"})
         nonce_ok = request.headers.get("x-glm-nonce") == self.valid_nonce
         body = json.loads(request.content)
         if path.endswith("/message"):
@@ -149,6 +149,7 @@ def fake_dns(monkeypatch):
 
 def make_settings(**overrides: Any) -> Settings:
     base: dict[str, Any] = {"api_keys": KEY, "upstream_max_retries": 1, "preflight_timeout": 5.0,
+                            "upstream_min_interval": 0,
                             "keepalive_interval": 5.0}
     base.update(overrides)
     return Settings(_env_file=None, **base)

@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     upstream_concurrency: int = 4
     upstream_queue_timeout: float = 60.0
     upstream_max_retries: int = 2
+    upstream_min_interval: float = 3.2
     nonce_ttl: float = 3600.0
     preflight_timeout: float = 20.0
     keepalive_interval: float = 15.0
@@ -82,6 +83,8 @@ class Settings(BaseSettings):
     model_aliases: str = ""
     allow_unknown_models: bool = False
     follow_switch: bool = False
+    report_actual_model: bool = True
+    strict_model: bool = False
 
     # --- images -----------------------------------------------------------
     max_image_bytes: int = 4 * 1024 * 1024
