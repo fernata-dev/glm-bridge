@@ -9,9 +9,9 @@ from .config import Settings
 from .errors import BridgeError
 
 # Public ids follow Zhipu's official dotted naming (so the same ids work against the
-# official API used as a fallback). Upstream ids use the dashed form that the
-# original script sends ("glm-5-3-flash"). Only that one id is confirmed; the rest
-# follow the same pattern and can be corrected with MODEL_MAP (run `probe --models`).
+# official API used as a fallback). Upstream ids are the dashed values the site's
+# own model picker uses (data-model="glm-5-3" ...), confirmed from its HTML.
+# glm-4.5-flash is not selectable on the site but is what it falls back to.
 DEFAULT_MODELS: dict[str, str] = {
     "glm-5.3": "glm-5-3",
     "glm-5.3-flash": "glm-5-3-flash",
@@ -19,7 +19,6 @@ DEFAULT_MODELS: dict[str, str] = {
     "glm-5.1": "glm-5-1",
     "glm-4.7": "glm-4-7",
     "glm-4.7-flash": "glm-4-7-flash",
-    "glm-4.7-flashx": "glm-4-7-flashx",
     "glm-4.6": "glm-4-6",
     "glm-4.5": "glm-4-5",
     "glm-4.5-flash": "glm-4-5-flash",
