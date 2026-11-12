@@ -80,6 +80,17 @@ def sse(obj: Any) -> bytes:
 SSE_DONE = b"data: [DONE]\n\n"
 
 
+_AGAIN_IN = re.compile(r"again in\s+(\d+(?:\.\d+)?)\s*s", re.I)
+
+
+def cooldown_seconds(ev: UpstreamEvent) -> float | None:
+    """Short per-message cooldowns ("send again in 2 s") are waited out, not reported."""
+    if ev.type != "limit":
+        return None
+    m = _AGAIN_IN.search(ev.message)
+    return float(m.group(1)) if m else None
+
+
 def terminal_error(ev: UpstreamEvent) -> BridgeError:
     msg = ev.message or f"upstream sent a '{ev.type}' event"
     extra: dict[str, Any] = {"upstream_event": ev.type}
@@ -304,6 +315,7 @@ class ChatService:
         retries = 0
         refreshed = False
         switched = False
+        cooldowns = 0
         while True:
             try:
                 nonce = await self.upstream.nonce()
@@ -320,6 +332,13 @@ class ChatService:
                 return pump, prefix
             except _Terminal as t:
                 await pump.aclose()
+                wait = cooldown_seconds(t.event)
+                if wait is not None and wait <= 30 and cooldowns < 3:
+                    cooldowns += 1
+                    meta.retries += 1
+                    log.info("upstream cooldown: waiting %.1fs", wait + 0.5)
+                    await asyncio.sleep(wait + 0.5)
+                    continue
                 switch = t.event.data.get("switch")
                 if (self.s.follow_switch and not switched and isinstance(switch, str)
                         and switch and switch != body["model"]):

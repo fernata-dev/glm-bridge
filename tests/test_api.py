@@ -479,3 +479,10 @@ async def test_status_endpoint(make_client, fake):
     st = (await client.get("/v1/bridge/status")).json()
     assert st["upstream"]["session_ready"] is True and st["upstream"]["paid_left"] == 3
     assert "nonce" not in json.dumps(st["upstream"]["session_info"])
+
+
+async def test_short_cooldown_is_waited_out(make_client, fake):
+    client = await make_client()
+    fake.script = [event("limit", message="One moment - send again in 0 s."), reply("after wait")]
+    r = await client.post("/v1/chat/completions", json=chat())
+    assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "after wait"

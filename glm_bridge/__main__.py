@@ -69,6 +69,7 @@ async def _ask(client: Any, body: dict[str, Any]) -> dict[str, Any]:
     from .upstream import NonceRejected, UpstreamHTTPError
 
     result: dict[str, Any] = {"text": "", "events": [], "error": None}
+    await asyncio.sleep(4)  # free models allow one message every ~3 s
     nonce = await client.nonce()
     for attempt in range(2):
         try:
